@@ -353,88 +353,180 @@ class GaussianDiffusion:
             self._loss_history = np.ones((self.num_timesteps//self._loss_interp_granu, self.token_max_length)) * np.linspace(0, 0.5, self.num_timesteps//self._loss_interp_granu)[:,None]
             self._loss_history_count = np.ones((self.num_timesteps//self._loss_interp_granu, self.token_max_length))
                 
-    def training_losses(self, model, training_step, t, model_kwargs=None, noise=None):
-        """
-        Compute training losses for a single timestep.
+    # def training_losses(self, model, training_step, t, model_kwargs=None, noise=None):
+    #     """
+    #     Compute training losses for a single timestep.
 
-        :param model: the model to evaluate loss on.
-        :param x_start: the [N x C x ...] tensor of inputs. It is NEVER used -- the embeddings are recreated every time from the input IDs.
-        :param t: a batch of timestep indices.
-        :param model_kwargs: if not None, a dict of extra keyword arguments to
-            pass to the model. This can be used for conditioning.
-        :param noise: if specified, the specific Gaussian noise to try to remove.
-        :return: a dict with the key "loss" containing a tensor of shape [N].
-                 Some mean or variance settings may also have other keys.
-        """
-        assert "input_ids" in model_kwargs
-        assert "decoder_input_ids" in model_kwargs
-        input_ids = model_kwargs.pop("decoder_input_ids").to(t.device)
-        if 'loss_mask' in model_kwargs:
-            loss_mask = model_kwargs.pop('loss_mask').to(t.device)
-        else:
-            loss_mask = None
-        x_start_mean = model.model.module.get_embeds(input_ids)
+    #     :param model: the model to evaluate loss on.
+    #     :param x_start: the [N x C x ...] tensor of inputs. It is NEVER used -- the embeddings are recreated every time from the input IDs.
+    #     :param t: a batch of timestep indices.
+    #     :param model_kwargs: if not None, a dict of extra keyword arguments to
+    #         pass to the model. This can be used for conditioning.
+    #     :param noise: if specified, the specific Gaussian noise to try to remove.
+    #     :return: a dict with the key "loss" containing a tensor of shape [N].
+    #              Some mean or variance settings may also have other keys.
+    #     """
+    #     assert "input_ids" in model_kwargs
+    #     assert "decoder_input_ids" in model_kwargs
+    #     input_ids = model_kwargs.pop("decoder_input_ids").to(t.device)
+    #     if 'loss_mask' in model_kwargs:
+    #         loss_mask = model_kwargs.pop('loss_mask').to(t.device)
+    #     else:
+    #         loss_mask = None
+    #     #x_start_mean = model.model.module.get_embeds(input_ids)
+    #     model_instance = model.model.module if hasattr(model.model, 'module') else model.model
+    #     x_start_mean = model_instance.get_embeds(input_ids)
+    
 
-        std = _extract_into_tensor(
-            self.sqrt_one_minus_alphas_cumprod,
-            th.tensor([0]).to(x_start_mean.device),
-            x_start_mean.shape,
-        )
-        x_start = self.get_x_start(x_start_mean, std)
+    #     std = _extract_into_tensor(
+    #         self.sqrt_one_minus_alphas_cumprod,
+    #         th.tensor([0]).to(x_start_mean.device),
+    #         x_start_mean.shape,
+    #     )
+    #     x_start = self.get_x_start(x_start_mean, std)
 
-        if noise is None:
-            noise = th.randn_like(x_start)
-        x_t = self.q_sample(x_start, t, noise=noise)  # reparametrization trick.
+    #     if noise is None:
+    #         noise = th.randn_like(x_start)
+    #     x_t = self.q_sample(x_start, t, noise=noise)  # reparametrization trick.
 
-        get_logits = model.model.module.get_logits
+    #     get_logits = model.model.module.get_logits
 
-        ### self-conditioning part
-        model_kwargs['self_conditions'] = th.zeros_like(x_t)
-        if np.random.uniform() > 0.5:
-            with th.no_grad():
-                model_output = model(x = x_t, ts = self._scale_timesteps(t), **model_kwargs)
-            model_kwargs['self_conditions'] = model_output.detach()
+    #     ### self-conditioning part
+    #     model_kwargs['self_conditions'] = th.zeros_like(x_t)
+    #     if np.random.uniform() > 0.5:
+    #         with th.no_grad():
+    #             model_output = model(x = x_t, ts = self._scale_timesteps(t), **model_kwargs)
+    #         model_kwargs['self_conditions'] = model_output.detach()
                         
-        model_output = model(x = x_t, ts = self._scale_timesteps(t), **model_kwargs)
+    #     model_output = model(x = x_t, ts = self._scale_timesteps(t), **model_kwargs)
 
-        target = {
-            ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(x_start=x_start, x_t=x_t, t=t)[
-                0
-            ],
-            ModelMeanType.START_X: x_start,  # THIS is actually used
-            ModelMeanType.EPSILON: noise,
-        }[self.model_mean_type]
+    #     target = {
+    #         ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(x_start=x_start, x_t=x_t, t=t)[
+    #             0
+    #         ],
+    #         ModelMeanType.START_X: x_start,  # THIS is actually used
+    #         ModelMeanType.EPSILON: noise,
+    #     }[self.model_mean_type]
 
-        assert (
-            model_output.shape == target.shape == x_start.shape
-        ), f"model_output.shape: {model_output.shape}, target.shape: {target.shape}, x_start.shape: {x_start.shape}"
-        # the usual diffusion loss
-        terms = {}
-        terms["mse"] = mean_flat((target - model_output) ** 2, loss_mask)
-        model_out_x_start = self.x0_helper(model_output, x_t, t)["pred_xstart"]
-        t0_mask = t == 0
-        t0_loss = mean_flat((x_start_mean - model_out_x_start) ** 2, loss_mask)
-        terms["mse"] = th.where(t0_mask, t0_loss, terms["mse"])
+    #     assert (
+    #         model_output.shape == target.shape == x_start.shape
+    #     ), f"model_output.shape: {model_output.shape}, target.shape: {target.shape}, x_start.shape: {x_start.shape}"
+    #     # the usual diffusion loss
+    #     terms = {}
+    #     terms["mse"] = mean_flat((target - model_output) ** 2, loss_mask)
+    #     model_out_x_start = self.x0_helper(model_output, x_t, t)["pred_xstart"]
+    #     t0_mask = t == 0
+    #     t0_loss = mean_flat((x_start_mean - model_out_x_start) ** 2, loss_mask)
+    #     terms["mse"] = th.where(t0_mask, t0_loss, terms["mse"])
 
-        ### adaptive noise schedule logging part
-        with th.no_grad():
-            mse_loss_log_ = th.mean((target - model_output) ** 2, dim = -1).detach()
-            t0_loss_log_ = th.mean((x_start_mean - model_out_x_start) ** 2, dim = -1).detach()
-            _loss_log = mse_loss_log_
-            _loss_log[t0_mask] = t0_loss_log_[t0_mask]
-            _loss_log[input_ids==self.pad_tok_id] = 0
-            self._loss_history_update(t, _loss_log, input_ids!=self.pad_tok_id, training_step)
+    #     ### adaptive noise schedule logging part
+    #     with th.no_grad():
+    #         mse_loss_log_ = th.mean((target - model_output) ** 2, dim = -1).detach()
+    #         t0_loss_log_ = th.mean((x_start_mean - model_out_x_start) ** 2, dim = -1).detach()
+    #         _loss_log = mse_loss_log_
+    #         _loss_log[t0_mask] = t0_loss_log_[t0_mask]
+    #         _loss_log[input_ids==self.pad_tok_id] = 0
+    #         self._loss_history_update(t, _loss_log, input_ids!=self.pad_tok_id, training_step)
 
-        out_mean, _, _ = self.q_mean_variance(
-            x_start, th.LongTensor([self.num_timesteps - 1]).to(x_start.device)
-        )
-        tT_loss = mean_flat(out_mean**2)
+    #     out_mean, _, _ = self.q_mean_variance(
+    #         x_start, th.LongTensor([self.num_timesteps - 1]).to(x_start.device)
+    #     )
+    #     tT_loss = mean_flat(out_mean**2)
         
-        decoder_nll = self.token_discrete_loss(x_start, get_logits, input_ids, mask=loss_mask)
+    #     decoder_nll = self.token_discrete_loss(x_start, get_logits, input_ids, mask=loss_mask)
 
-        terms["loss"] = terms["mse"] + (decoder_nll + tT_loss)
+    #     terms["loss"] = terms["mse"] + (decoder_nll + tT_loss)
 
-        return terms
+    #     return terms
+    def training_losses(self, model, training_step, t, model_kwargs=None, noise=None):
+      """
+      Compute training losses for a single timestep.
+
+      :param model: the model to evaluate loss on.
+      :param t: a batch of timestep indices.
+      :param training_step: current training step for logging.
+      :param model_kwargs: if not None, a dict of extra keyword arguments to
+          pass to the model. This can be used for conditioning.
+      :param noise: if specified, the specific Gaussian noise to try to remove.
+      :return: a dict with the key "loss" containing a tensor of shape [N].
+              Some mean or variance settings may also have other keys.
+      """
+      assert "input_ids" in model_kwargs, "input_ids must be in model_kwargs"
+      assert "decoder_input_ids" in model_kwargs, "decoder_input_ids must be in model_kwargs"
+
+      input_ids = model_kwargs.pop("decoder_input_ids").to(t.device)
+      loss_mask = model_kwargs.pop("loss_mask", None)
+      if loss_mask is not None:
+          loss_mask = loss_mask.to(t.device)
+
+      # Handle both wrapped and unwrapped models
+      if hasattr(model.model, 'module'):
+          model_instance = model.model.module
+      else:
+          model_instance = model.model
+
+      # Retrieve embeddings and logits
+      x_start_mean = model_instance.get_embeds(input_ids)
+      get_logits = model_instance.get_logits
+
+      std = _extract_into_tensor(
+          self.sqrt_one_minus_alphas_cumprod,
+          th.tensor([0]).to(x_start_mean.device),
+          x_start_mean.shape,
+      )
+      x_start = self.get_x_start(x_start_mean, std)
+
+      if noise is None:
+          noise = th.randn_like(x_start)
+      x_t = self.q_sample(x_start, t, noise=noise)
+
+      ### Self-conditioning part
+      model_kwargs['self_conditions'] = th.zeros_like(x_t)
+      if np.random.uniform() > 0.5:
+          with th.no_grad():
+              model_output = model(x=x_t, ts=self._scale_timesteps(t), **model_kwargs)
+          model_kwargs['self_conditions'] = model_output.detach()
+
+      model_output = model(x=x_t, ts=self._scale_timesteps(t), **model_kwargs)
+
+      target = {
+          ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(x_start=x_start, x_t=x_t, t=t)[0],
+          ModelMeanType.START_X: x_start,
+          ModelMeanType.EPSILON: noise,
+      }[self.model_mean_type]
+
+      assert (
+          model_output.shape == target.shape == x_start.shape
+      ), f"model_output.shape: {model_output.shape}, target.shape: {target.shape}, x_start.shape: {x_start.shape}"
+
+      # Compute MSE loss
+      terms = {}
+      terms["mse"] = mean_flat((target - model_output) ** 2, loss_mask)
+      model_out_x_start = self.x0_helper(model_output, x_t, t)["pred_xstart"]
+      t0_mask = t == 0
+      t0_loss = mean_flat((x_start_mean - model_out_x_start) ** 2, loss_mask)
+      terms["mse"] = th.where(t0_mask, t0_loss, terms["mse"])
+
+      ### Adaptive noise schedule logging part
+      with th.no_grad():
+          mse_loss_log_ = th.mean((target - model_output) ** 2, dim=-1).detach()
+          t0_loss_log_ = th.mean((x_start_mean - model_out_x_start) ** 2, dim=-1).detach()
+          _loss_log = mse_loss_log_
+          _loss_log[t0_mask] = t0_loss_log_[t0_mask]
+          _loss_log[input_ids == self.pad_tok_id] = 0
+          self._loss_history_update(t, _loss_log, input_ids != self.pad_tok_id, training_step)
+
+      # Compute additional loss terms
+      out_mean, _, _ = self.q_mean_variance(
+          x_start, th.LongTensor([self.num_timesteps - 1]).to(x_start.device)
+      )
+      tT_loss = mean_flat(out_mean ** 2)
+      decoder_nll = self.token_discrete_loss(x_start, get_logits, input_ids, mask=loss_mask)
+
+      terms["loss"] = terms["mse"] + (decoder_nll + tT_loss)
+
+      return terms
+
 
     def get_x_start(self, x_start_mean, std):
         """
